@@ -1,0 +1,14 @@
+{
+  "name": "merge-gate-explainer",
+  "title": "Merge Gate Explainer",
+  "description": "Rovo agent for Jira that explains Merge Policy Gate verdicts on Bitbucket pull requests.",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@forge/api": "^6.0.0",
+    "@forge/kvs": "^1.0.0"
+  }
+}

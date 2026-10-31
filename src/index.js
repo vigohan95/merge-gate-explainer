@@ -4,7 +4,7 @@
 // lives in the Bitbucket app (merge-policy-gate) and this app, installed on the Jira site, reads verdicts from
 // that app's verdict-feed web trigger. The feed carries nothing secret: a verdict is already visible to anyone who
 // can open the pull request.
-import { fetch } from "@forge/api";
+import api, { fetch, route } from "@forge/api";
 import { kvs } from "@forge/kvs";
 import { RULES, unblockHint, policyTemplateText, DEFAULT_POLICY } from "./rules.js";
 
@@ -91,4 +91,113 @@ export async function explainRule(payload) {
 export async function policyTemplate(payload) {
   if (String(payload?.format || "").toLowerCase() === "json") return { path: "MERGE-POLICY.md", defaults: DEFAULT_POLICY };
   return { path: "MERGE-POLICY.md", content: policyTemplateText() };
+}
+
+// ---- Teamwork Graph: work item -> status + linked pull requests -> gate verdicts -----------------------
+
+const WORK_ITEM_QUERY = `query workItem($id: ID!) {
+  jiraWorkItem(id: $id) { key summary webUrl status { name } assignee { name } }
+  jiraWorkItemLinkedExternalPullRequests(id: $id, first: 25) {
+    edges { node { ... on ExternalPullRequest { displayId title url status lastUpdatedAt provider { name } reviewers { approvalStatus } } } }
+    pageInfo { hasNextPage }
+  }
+}`;
+
+async function cloudIdFrom(context) {
+  if (context?.cloudId) return context.cloudId;
+  const m = /ari:cloud:jira::site\/([0-9a-f-]+)/i.exec(String(context?.installContext || ""));
+  if (m) return m[1];
+  const res = await api.asApp().requestJira(route`/_edge/tenant_info`);
+  return res.ok ? (await res.json()).cloudId : null;
+}
+
+/** Read the work item from the Teamwork Graph; as the user first (what they may see), then as the app. */
+async function graphWorkItem(ari) {
+  const errors = [];
+  for (const who of ["asUser", "asApp"]) {
+    try {
+      const res = await api[who]().requestTeamworkGraph(WORK_ITEM_QUERY, { id: ari });
+      const body = await res.json();
+      if (body?.data?.jiraWorkItem) return { data: body.data, via: who, errors: body.errors || [] };
+      errors.push(`${who}: ${res.status} ${JSON.stringify(body?.errors || body).slice(0, 300)}`);
+    } catch (e) {
+      errors.push(`${who}: ${String(e.message || e).slice(0, 300)}`);
+    }
+  }
+  return { data: null, via: null, errors };
+}
+
+/** Action: everything the gate and the graph know about one Jira work item. */
+export async function workItemPullRequests(payload, context) {
+  const key = String(payload.issueKey || "").trim().toUpperCase();
+  if (!/^[A-Z][A-Z0-9]{1,9}-\d+$/.test(key)) return "I need a Jira work item key, for example KAN-3.";
+
+  // 1. Jira REST gives the numeric id (needed for the ARI) and a fallback status.
+  const issueRes = await api.asApp().requestJira(route`/rest/api/3/issue/${key}?fields=status,summary,assignee`);
+  if (issueRes.status === 404) return `There is no work item ${key} on this site, or the app cannot see it.`;
+  if (!issueRes.ok) return `Jira answered ${issueRes.status} for ${key}.`;
+  const issue = await issueRes.json();
+  const cloudId = await cloudIdFrom(context);
+  const ari = cloudId ? `ari:cloud:jira:${cloudId}:issue/${issue.id}` : null;
+
+  // 2. Teamwork Graph: current status and the pull requests linked to the work item (any connected tool).
+  const graph = ari ? await graphWorkItem(ari) : { data: null, via: null, errors: ["no cloudId in context"] };
+  const g = graph.data?.jiraWorkItem;
+  const status = g?.status?.name || issue.fields?.status?.name || null;
+  const linked = (graph.data?.jiraWorkItemLinkedExternalPullRequests?.edges || [])
+    .map((e) => e.node)
+    .filter(Boolean)
+    .map((n) => ({
+      number: n.displayId,
+      title: n.title,
+      url: n.url,
+      state: n.status,
+      provider: n.provider?.name,
+      approvals: (n.reviewers || []).filter((r) => r.approvalStatus === "APPROVED").length,
+      lastUpdatedAt: n.lastUpdatedAt,
+    }));
+
+  // 3. The gate: every pull request it evaluated for this key, re-checked against the current status so §4.1
+  //    (jira_allowed_statuses) is applied with the real work item state rather than skipped.
+  const feed = await callFeed({ jira: key });
+  let gateKnown = [];
+  let gateNote = null;
+  if (feed.error === "not connected") gateNote = NOT_CONNECTED;
+  else if (feed.status !== 200) gateNote = `The gate answered ${feed.status}: ${feed.body?.error || ""}`;
+  else gateKnown = feed.body?.pullRequests || [];
+  const verdicts = [];
+  for (const rec of gateKnown.slice(0, 5)) {
+    let fresh = rec;
+    if (status && rec.workspace && rec.repo && rec.prId) {
+      const r = await callFeed({ workspace: rec.workspace, repository: rec.repo, pr: rec.prId, live: "1", jiraStatus: status });
+      if (r.status === 200) fresh = r.body;
+    }
+    verdicts.push({
+      pullRequest: `${fresh.workspace}/${fresh.repo}#${fresh.prId}`,
+      title: fresh.title,
+      verdict: fresh.allowed ? "pass" : "held",
+      reasons: fresh.reasons || [],
+      rulesCited: fresh.rules || [],
+      evaluatedAt: fresh.evaluatedAt,
+      howToUnblock: fresh.allowed ? [] : (fresh.violated || []).map((r) => `${r}: ${unblockHint(r)}`),
+    });
+  }
+
+  return {
+    workItem: {
+      key,
+      summary: g?.summary || issue.fields?.summary || null,
+      status,
+      assignee: g?.assignee?.name || issue.fields?.assignee?.displayName || null,
+      url: g?.webUrl || null,
+      statusSource: g ? `teamwork-graph (${graph.via})` : "jira-rest",
+    },
+    linkedPullRequestsInGraph: linked,
+    graphNotes: graph.errors.length && !g ? graph.errors : undefined,
+    gateVerdicts: verdicts,
+    gateNote: gateNote || undefined,
+    summary: verdicts.length
+      ? `${key} is ${status || "in an unknown status"}; ${verdicts.filter((v) => v.verdict === "held").length} of ${verdicts.length} evaluated pull request(s) held.`
+      : `${key} is ${status || "in an unknown status"}; the gate has not evaluated any pull request for it yet.`,
+  };
 }

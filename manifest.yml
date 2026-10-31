@@ -1,6 +1,11 @@
 permissions:
   scopes:
     - storage:app
+    - read:jira-work
+    - read:graph:issue:jira
+    - read:graph:issue-status:jira
+    - read:graph:pull-request:external
+    - read:graph:user:atlassian
   external:
     fetch:
       backend:
@@ -15,14 +20,39 @@ modules:
       prompt: resource:agent-resources;prompts/merge-gate-explainer.md
       conversationStarters:
         - Why is pull request 2 in hanvigo-dev/gate-demo held?
+        - Which pull requests of KAN-3 are held, and why?
         - What does rule 2.1 mean?
+        - What releases a §2.2 dependency hold without a new push?
         - Give me a starter MERGE-POLICY.md for my repository.
+      followUpPrompt: Suggest up to three short follow-ups a developer or release manager would ask next about this verdict, this work item, or this rule, for example asking for the other pull requests of the same work item, what a cited rule means, or how to change the policy. Never suggest bypassing the gate.
       actions:
         - connect-gate
         - explain-pull-request
         - stored-verdict
+        - work-item-pull-requests
         - explain-rule
         - policy-template
+      skills:
+        - unblock-held-pull-request
+        - adopt-merge-policy
+  rovo:skill:
+    - key: unblock-held-pull-request
+      source:
+        dir: skills/unblock-held-pull-request
+      dependencies:
+        tools:
+          - explain-pull-request
+          - stored-verdict
+          - explain-rule
+          - work-item-pull-requests
+    - key: adopt-merge-policy
+      source:
+        dir: skills/adopt-merge-policy
+      dependencies:
+        tools:
+          - policy-template
+          - explain-rule
+          - explain-pull-request
   action:
     - key: connect-gate
       name: Connect this site to a Merge Policy Gate installation
@@ -84,6 +114,17 @@ modules:
           type: integer
           required: true
           description: The pull request id
+    - key: work-item-pull-requests
+      name: List the pull requests of a Jira work item with their gate verdicts
+      function: fn-work-item-prs
+      actionVerb: GET
+      description: For a Jira work item key (for example KAN-3) return its current status from the Teamwork Graph, the pull requests linked to it, and the verdict Merge Policy Gate stored for each. Use when the user names a work item instead of a pull request, asks which pull requests of a ticket are held, or asks whether a ticket is ready to merge.
+      inputs:
+        issueKey:
+          title: Work item key
+          type: string
+          required: true
+          description: The Jira work item key, for example KAN-3
     - key: explain-rule
       name: Explain a merge policy rule
       function: fn-explain-rule
@@ -119,6 +160,8 @@ modules:
       handler: index.storedVerdict
     - key: fn-explain-rule
       handler: index.explainRule
+    - key: fn-work-item-prs
+      handler: index.workItemPullRequests
     - key: fn-policy-template
       handler: index.policyTemplate
 resources:

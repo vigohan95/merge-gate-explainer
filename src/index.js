@@ -95,10 +95,14 @@ export async function policyTemplate(payload) {
 
 // ---- Teamwork Graph: work item -> status + linked pull requests -> gate verdicts -----------------------
 
-const WORK_ITEM_QUERY = `query workItem($id: ID!) {
-  jiraWorkItem(id: $id) { key summary webUrl status { name } assignee { name } }
+// Verified against the live schema (introspection on the demo site, 2026-10-31): there is no `jiraWorkItem` root
+// field; objects are fetched by ARI through `objects(ids)` whose `data` is a union, and linked pull requests come
+// from the curated `jiraWorkItemLinkedExternalPullRequests`. Operation names must look like `<company>_<operation>`.
+const WORK_ITEM_OPERATION = "mpg_workItem";
+const WORK_ITEM_QUERY = `query mpg_workItem($id: ID!, $ids: [ID!]!) {
+  objects(ids: $ids) { id data { __typename ... on JiraWorkItem { key summary webUrl status { name } assignee { name } } } }
   jiraWorkItemLinkedExternalPullRequests(id: $id, first: 25) {
-    edges { node { ... on ExternalPullRequest { displayId title url status lastUpdatedAt provider { name } reviewers { approvalStatus } } } }
+    edges { node { __typename ... on ExternalPullRequest { displayId title url status lastUpdatedAt provider { name } reviewers { approvalStatus } } } }
     pageInfo { hasNextPage }
   }
 }`;
@@ -116,9 +120,10 @@ async function graphWorkItem(ari) {
   const errors = [];
   for (const who of ["asUser", "asApp"]) {
     try {
-      const res = await api[who]().requestTeamworkGraph(WORK_ITEM_QUERY, { id: ari });
+      const res = await api[who]().requestTeamworkGraph(WORK_ITEM_QUERY, { id: ari, ids: [ari] }, WORK_ITEM_OPERATION);
       const body = await res.json();
-      if (body?.data?.jiraWorkItem) return { data: body.data, via: who, errors: body.errors || [] };
+      const item = (body?.data?.objects || []).map((o) => o?.data).find((d) => d?.__typename === "JiraWorkItem");
+      if (item) return { data: { ...body.data, jiraWorkItem: item }, via: who, errors: body.errors || [] };
       errors.push(`${who}: ${res.status} ${JSON.stringify(body?.errors || body).slice(0, 300)}`);
     } catch (e) {
       errors.push(`${who}: ${String(e.message || e).slice(0, 300)}`);

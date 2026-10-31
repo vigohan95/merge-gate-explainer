@@ -118,7 +118,7 @@ modules:
       name: List the pull requests of a Jira work item with their gate verdicts
       function: fn-work-item-prs
       actionVerb: GET
-      description: For a Jira work item key (for example KAN-3) return its current status from the Teamwork Graph, the pull requests linked to it, and the verdict Merge Policy Gate stored for each. Use when the user names a work item instead of a pull request, asks which pull requests of a ticket are held, or asks whether a ticket is ready to merge.
+      description: For a Jira work item key such as KAN-3, return its status from the Teamwork Graph, its linked pull requests and the gate verdict for each. Use when the user names a work item or ticket instead of a pull request.
       inputs:
         issueKey:
           title: Work item key

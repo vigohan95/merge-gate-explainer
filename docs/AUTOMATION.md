@@ -15,6 +15,10 @@ What the rule does, end to end:
 
 Nothing is written to Bitbucket. The comment is the only side effect.
 
+## Verified
+
+Built and enabled on the Forge demo Jira site on 2026-11-01 (project KAN, rule "Merge Policy Gate: comment held pull requests on transition"). Transitioning KAN-3 produced the comment within 30 seconds: *Merge Policy Gate checked the pull requests of KAN-3 (1 evaluated): hanvigo-dev/gate-demo#3 "KAN-3: add generated fixture rows" — HELD: §3.4 size limit exceeded: 520 lines / 1 files (max 400 / 20)*. Notes from the build: the smart-values condition on that site offered no "greater than" operator, so the condition is `{{webResponse.body.pullRequests.size}}` *does not equal* `0`; the trigger was left on "any status" for the demo.
+
 ## Prerequisites
 
 - Merge Policy Gate installed on the Bitbucket workspace, check enabled on the repository, and at least one evaluation
@@ -30,7 +34,7 @@ Nothing is written to Bitbucket. The comment is the only side effect.
 | Trigger | **Work item transitioned** | To status: *In Review* (and/or *Done*). Leave *From* empty. |
 | Action | **Send web request** | Web request URL: `https://<feed-host>/x1/<id>?jira={{issue.key}}` · HTTP method: `GET` · Headers: `Accept: application/json` · Web request body: *Empty* · tick **Delay execution of subsequent rule actions until we've received a response for this web request** |
 | Condition | **{{smart values}} condition** | First value: `{{webResponse.status}}` · Condition: *equals* · Second value: `200` |
-| Condition | **{{smart values}} condition** | First value: `{{webResponse.body.pullRequests.size}}` · Condition: *greater than* · Second value: `0` |
+| Condition | **{{smart values}} condition** | First value: `{{webResponse.body.pullRequests.size}}` · Condition: *does not equal* · Second value: `0` |
 | Action | **Comment on work item** | Comment text below |
 
 Comment text (smart values iterate over the feed's `pullRequests` array):

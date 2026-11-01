@@ -5,7 +5,7 @@ custom merge check that judges pull requests against `MERGE-POLICY.md` and cites
 app for Jira with a Rovo agent that answers, in one screen, the question every held pull request raises:
 **why, and what do I do now?**
 
-Built for Codegeist 2026. MIT licensed.
+Built for Codegeist 2026. Apache-2.0 licensed (the Marketplace listing uses the same license).
 
 ## What it does
 
